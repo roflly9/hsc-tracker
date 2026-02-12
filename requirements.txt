@@ -3,3 +3,4 @@ streamlit-folium
 folium
 firebase-admin
 streamlit-js-eval
+streamlit-autorefresh
