@@ -6,82 +6,76 @@ from streamlit_js_eval import get_geolocation
 from firebase_admin import db, credentials, initialize_app, _apps
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG DATABASE ---
-# Pastikan URL ini benar-benar lengkap seperti di bawah
+# --- 1. KONEKSI DATABASE ---
 database_url = "https://biker-tacker-default-rtdb.asia-southeast1.firebasedatabase.app/"
 
 if not _apps:
     initialize_app(options={'databaseURL': database_url})
 
-# Set konfigurasi halaman (Harus di bagian atas)
 st.set_page_config(page_title="HSC Radar", layout="wide")
-
-# Auto-refresh tiap 30 detik
-st_autorefresh(interval=30000, key="datarefresh")
+st_autorefresh(interval=30000, key="datarefresh") # Refresh tiap 30 detik
 
 st.title("🏍️ Radar Real-Time Komunitas HSC")
 
-# --- 2. FITUR PENDAFTARAN (SIDEBAR) ---
-st.sidebar.header("📝 Pendaftaran Member Online")
-
+# --- 2. SIDEBAR PENDAFTARAN ---
+st.sidebar.header("📝 Status Anda")
 nama_user = st.sidebar.text_input("Nama Lengkap:")
 status_user = st.sidebar.selectbox("Status:", ["Member", "Prospek"])
+nra_user = st.sidebar.text_input("NRA:") if status_user == "Member" else "N/A"
 
-nra_user = ""
-if status_user == "Member":
-    nra_user = st.sidebar.text_input("Masukkan NRA (Nomor Register Anggota):")
-
-# Tombol untuk kirim lokasi
 loc = get_geolocation()
+lat_saya, lon_saya = -6.2000, 106.8166 # Default Jakarta jika GPS mati
 
-if loc:
-    lat = loc['coords']['latitude']
-    lon = loc['coords']['longitude']
-    st.sidebar.success("📍 GPS Terdeteksi")
+if loc and 'coords' in loc:
+    lat_saya = loc['coords']['latitude']
+    lon_saya = loc['coords']['longitude']
     
     if st.sidebar.button("Go Online 🏍️"):
         if nama_user:
-            if status_user == "Member" and not nra_user:
-                st.sidebar.error("NRA wajib diisi!")
-            else:
-                # Simpan ke Firebase
-                ref = db.reference(f'members/{nama_user}')
-                ref.set({
-                    'nama': nama_user,
-                    'status': status_user,
-                    'nra': nra_user if status_user == "Member" else "N/A",
-                    'lat': lat,
-                    'lon': lon,
-                    'waktu': str(pd.Timestamp.now(tz='Asia/Jakarta'))
-                })
-                st.sidebar.balloons()
-                st.sidebar.success(f"Gaspol, {nama_user}!")
+            ref = db.reference(f'members/{nama_user}')
+            ref.set({
+                'nama': nama_user,
+                'status': status_user,
+                'nra': nra_user,
+                'lat': lat_saya,
+                'lon': lon_saya,
+                'waktu': str(pd.Timestamp.now(tz='Asia/Jakarta'))
+            })
+            st.sidebar.success(f"Kamu sedang Online!")
         else:
-            st.sidebar.error("Nama harus diisi!")
-else:
-    st.sidebar.warning("Tunggu GPS / Klik 'Allow' di browser HP.")
+            st.sidebar.error("Isi nama dulu!")
 
-# --- 3. TAMPILKAN PETA ---
-st.subheader("Peta Pantauan Member")
+# --- 3. TAMPILAN PETA ALA OJOL ---
+st.subheader("Peta Pantauan Member (Live)")
 
-ref = db.reference('members')
-data_members = ref.get()
+# Ambil semua data dari Firebase
+ref_map = db.reference('members')
+semua_member = ref_map.get()
 
-# Gunakan lokasi user sebagai pusat peta, jika tidak ada pakai Jakarta
-center_lat = lat if loc else -6.2000
-center_lon = lon if loc else 106.8166
+# Buat Base Map (Menggunakan Google Maps Hybrid Style via Folium)
+m = folium.Map(location=[lat_saya, lon_saya], zoom_start=12, tiles='OpenStreetMap')
 
-m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+# Tambahkan Marker untuk setiap member yang ada di database
+if semua_member:
+    for nama, info in semua_member.items():
+        if 'lat' in info and 'lon' in info:
+            # Tentukan warna: Member = Merah, Prospek = Biru
+            warna = 'red' if info.get('status') == 'Member' else 'blue'
+            
+            # Isi teks saat marker diklik (Popup)
+            isi_popup = f"""
+                <b>{info['nama']}</b><br>
+                Status: {info['status']}<br>
+                NRA: {info['nra']}<br>
+                Update: {info.get('waktu', 'N/A')}
+            """
+            
+            folium.Marker(
+                location=[info['lat'], info['lon']],
+                popup=folium.Popup(isi_popup, max_width=300),
+                tooltip=info['nama'],
+                icon=folium.Icon(color=warna, icon='motorcycle', prefix='fa')
+            ).add_to(m)
 
-if data_members:
-    for nama, info in data_members.items():
-        # Member = Merah, Prospek = Biru
-        warna = "red" if info.get('status') == "Member" else "blue"
-        folium.Marker(
-            [info['lat'], info['lon']],
-            popup=f"{nama} ({info.get('status')})",
-            tooltip=nama,
-            icon=folium.Icon(color=warna, icon='motorcycle', prefix='fa')
-        ).add_to(m)
-
-folium_static(m, width=1000)
+# Tampilkan Peta di Streamlit
+folium_static(m, width=1000, height=500)
